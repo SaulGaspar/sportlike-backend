@@ -6,6 +6,7 @@ const jwt = require('jsonwebtoken');
 const mysql = require('mysql2/promise');
 const multer = require('multer');
 const nodemailer = require('nodemailer');
+const serverless = require('serverless-http'); // necesario para Vercel
 require('dotenv').config();
 
 const app = express();
@@ -49,6 +50,8 @@ function adminOnly(req, res, next) {
   if (!req.user || req.user.rol !== 'admin') return res.status(403).json({ error: 'Solo administradores' });
   next();
 }
+
+// Rutas
 
 app.post('/api/register', async (req, res) => {
   const { nombre, apellidoP, apellidoM, fechaNac, correo, telefono, usuario, password, rol } = req.body;
@@ -120,10 +123,11 @@ app.get('/api/verify-email', async (req, res) => {
     await db.execute('UPDATE users SET verificado = 1 WHERE id = ?', [decoded.id]);
     res.send('Correo verificado correctamente. Ahora puedes iniciar sesión.');
   } catch (err) {
-    console.error(err);A
+    console.error(err);
     res.status(400).send('Token inválido o expirado');
   }
 });
 
-const PORT = process.env.PORT || 3001;
-app.listen(PORT, () => console.log('Backend listening on', PORT));
+// Export para Vercel
+module.exports = app;
+module.exports.handler = serverless(app);
