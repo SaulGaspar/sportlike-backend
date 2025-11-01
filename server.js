@@ -45,6 +45,12 @@ function adminOnly(req, res, next) {
   next();
 }
 
+// RUTA RAÍZ para comprobar que el servidor funciona
+app.get('/', (req, res) => {
+  res.send('Servidor SportLike funcionando correctamente');
+});
+
+// REGISTRO
 app.post('/api/register', async (req, res) => {
   const { nombre, apellidoP, apellidoM, fechaNac, correo, telefono, usuario, password, rol } = req.body;
   if (!nombre || !apellidoP || !usuario || !password || !correo)
@@ -93,6 +99,7 @@ app.post('/api/register', async (req, res) => {
   }
 });
 
+// LOGIN
 app.post('/api/login', async (req, res) => {
   const { usuario, password } = req.body;
   try {
@@ -114,6 +121,7 @@ app.post('/api/login', async (req, res) => {
   }
 });
 
+// VERIFICACIÓN EMAIL
 app.get('/api/verify-email', async (req, res) => {
   const token = req.query.token;
   if (!token) return res.status(400).send('Token inválido');
@@ -128,6 +136,7 @@ app.get('/api/verify-email', async (req, res) => {
   }
 });
 
+// OBTENER TODOS LOS USUARIOS (SOLO ADMIN)
 app.get('/api/users', authMiddleware, adminOnly, async (req, res) => {
   try {
     const db = await getDB();
@@ -140,4 +149,4 @@ app.get('/api/users', authMiddleware, adminOnly, async (req, res) => {
 });
 
 const PORT = process.env.PORT || 5000;
-app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
+app.listen(PORT, () => console.log(`Servidor corriendo en http://localhost:${PORT}`));
