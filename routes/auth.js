@@ -2,7 +2,7 @@ const express = require('express');
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const nodemailer = require('nodemailer');
-const getDB = require('./db');
+const getDB = require('../db/');
 require('dotenv').config();
 
 const router = express.Router();
