@@ -4,22 +4,17 @@ const bodyParser = require('body-parser');
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const mysql = require('mysql2/promise');
-const multer = require('multer');
 const nodemailer = require('nodemailer');
-const serverless = require('serverless-http');
 require('dotenv').config();
 
 const app = express();
 app.use(cors());
 app.use(bodyParser.json());
-app.use('/uploads', express.static('uploads'));
 
-const upload = multer({ dest: 'uploads/' });
 const JWT_SECRET = process.env.JWT_SECRET || 'change_this_secret';
 
-// Conexión a la base de datos
 async function getDB() {
-  const pool = await mysql.createPool({
+  return mysql.createPool({
     host: process.env.DB_HOST,
     user: process.env.DB_USER,
     password: process.env.DB_PASS,
@@ -29,10 +24,8 @@ async function getDB() {
     connectionLimit: 10,
     queueLimit: 0
   });
-  return pool;
 }
 
-// Middleware de autenticación
 function authMiddleware(req, res, next) {
   const auth = req.headers.authorization;
   if (!auth) return res.status(401).json({ error: 'No token' });
@@ -40,21 +33,18 @@ function authMiddleware(req, res, next) {
   if (parts.length !== 2) return res.status(401).json({ error: 'Token error' });
   const token = parts[1];
   try {
-    const decoded = jwt.verify(token, JWT_SECRET);
-    req.user = decoded;
+    req.user = jwt.verify(token, JWT_SECRET);
     next();
-  } catch (err) {
+  } catch {
     return res.status(401).json({ error: 'Token inválido' });
   }
 }
 
-// Middleware solo admin
 function adminOnly(req, res, next) {
   if (!req.user || req.user.rol !== 'admin') return res.status(403).json({ error: 'Solo administradores' });
   next();
 }
 
-// Registro de usuario
 app.post('/api/register', async (req, res) => {
   const { nombre, apellidoP, apellidoM, fechaNac, correo, telefono, usuario, password, rol } = req.body;
   if (!nombre || !apellidoP || !usuario || !password || !correo)
@@ -69,8 +59,7 @@ app.post('/api/register', async (req, res) => {
       'SELECT id FROM users WHERE usuario = ? OR correo = ? OR telefono = ?',
       [usuario, correo, telefono]
     );
-    if (existing.length > 0)
-      return res.status(400).json({ error: 'Usuario, correo o teléfono ya registrado' });
+    if (existing.length > 0) return res.status(400).json({ error: 'Usuario, correo o teléfono ya registrado' });
 
     const hash = await bcrypt.hash(password, 10);
     const [result] = await db.execute(
@@ -79,7 +68,6 @@ app.post('/api/register', async (req, res) => {
     );
 
     const token = jwt.sign({ id: result.insertId, correo }, JWT_SECRET, { expiresIn: '1d' });
-
     const transporter = nodemailer.createTransport({
       host: process.env.EMAIL_HOST,
       port: process.env.EMAIL_PORT,
@@ -105,7 +93,6 @@ app.post('/api/register', async (req, res) => {
   }
 });
 
-// Login de usuario
 app.post('/api/login', async (req, res) => {
   const { usuario, password } = req.body;
   try {
@@ -127,7 +114,6 @@ app.post('/api/login', async (req, res) => {
   }
 });
 
-// Verificación de email
 app.get('/api/verify-email', async (req, res) => {
   const token = req.query.token;
   if (!token) return res.status(400).send('Token inválido');
@@ -137,13 +123,11 @@ app.get('/api/verify-email', async (req, res) => {
     const db = await getDB();
     await db.execute('UPDATE users SET verificado = 1 WHERE id = ?', [decoded.id]);
     res.send('Correo verificado correctamente. Ahora puedes iniciar sesión.');
-  } catch (err) {
-    console.error(err);
+  } catch {
     res.status(400).send('Token inválido o expirado');
   }
 });
 
-// Obtener todos los usuarios (solo admin)
 app.get('/api/users', authMiddleware, adminOnly, async (req, res) => {
   try {
     const db = await getDB();
@@ -155,11 +139,5 @@ app.get('/api/users', authMiddleware, adminOnly, async (req, res) => {
   }
 });
 
-// Endpoint para subir archivos (opcional)
-app.post('/api/upload', upload.single('file'), (req, res) => {
-  if (!req.file) return res.status(400).json({ error: 'No file uploaded' });
-  res.json({ filename: req.file.filename, path: `/uploads/${req.file.filename}` });
-});
-
-// Exportar para Vercel
-module.exports.handler = serverless(app);
+const PORT = process.env.PORT || 5000;
+app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
