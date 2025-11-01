@@ -120,7 +120,7 @@ app.get('/api/verify-email', async (req, res) => {
     await db.execute('UPDATE users SET verificado = 1 WHERE id = ?', [decoded.id]);
     res.send('Correo verificado correctamente. Ahora puedes iniciar sesión.');
   } catch (err) {
-    console.error(err);
+    console.error(err);A
     res.status(400).send('Token inválido o expirado');
   }
 });
