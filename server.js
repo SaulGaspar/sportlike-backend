@@ -6,6 +6,7 @@ const jwt = require('jsonwebtoken');
 const mysql = require('mysql2/promise');
 const multer = require('multer');
 const nodemailer = require('nodemailer');
+const serverless = require('serverless-http');
 require('dotenv').config();
 
 const app = express();
@@ -18,7 +19,7 @@ const JWT_SECRET = process.env.JWT_SECRET || 'change_this_secret';
 
 // Conexión a la base de datos
 async function getDB() {
-  const conn = await mysql.createPool({
+  const pool = await mysql.createPool({
     host: process.env.DB_HOST,
     user: process.env.DB_USER,
     password: process.env.DB_PASS,
@@ -28,7 +29,7 @@ async function getDB() {
     connectionLimit: 10,
     queueLimit: 0
   });
-  return conn;
+  return pool;
 }
 
 // Middleware de autenticación
@@ -119,7 +120,7 @@ app.post('/api/login', async (req, res) => {
     if (!match) return res.status(401).json({ error: 'Contraseña incorrecta' });
 
     const token = jwt.sign({ id: user.id, usuario: user.usuario, rol: user.rol }, JWT_SECRET, { expiresIn: '7d' });
-    res.json({ user: { id: user.id, nombre: user.nombre, usuario: user.usuario, rol: user.rol }, token });
+    res.json({ user: { id: user.id, nombre: user.nombre, usuario: user.usuario, rol: user.rol, correo: user.correo }, token });
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: 'Error en login' });
@@ -142,5 +143,23 @@ app.get('/api/verify-email', async (req, res) => {
   }
 });
 
+// Obtener todos los usuarios (solo admin)
+app.get('/api/users', authMiddleware, adminOnly, async (req, res) => {
+  try {
+    const db = await getDB();
+    const [rows] = await db.execute('SELECT id, nombre, apellidoP, apellidoM, correo, usuario, rol FROM users');
+    res.json(rows);
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Error al obtener usuarios' });
+  }
+});
+
+// Endpoint para subir archivos (opcional)
+app.post('/api/upload', upload.single('file'), (req, res) => {
+  if (!req.file) return res.status(400).json({ error: 'No file uploaded' });
+  res.json({ filename: req.file.filename, path: `/uploads/${req.file.filename}` });
+});
+
 // Exportar para Vercel
-module.exports = app;
+module.exports.handler = serverless(app);
