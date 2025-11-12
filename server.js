@@ -45,12 +45,10 @@ function adminOnly(req, res, next) {
   next();
 }
 
-// RUTA RAÍZ para comprobar que el servidor funciona
 app.get('/', (req, res) => {
   res.send('Servidor SportLike funcionando correctamente');
 });
 
-// REGISTRO
 app.post('/api/register', async (req, res) => {
   const { nombre, apellidoP, apellidoM, fechaNac, correo, telefono, usuario, password, rol } = req.body;
   if (!nombre || !apellidoP || !usuario || !password || !correo)
@@ -120,6 +118,18 @@ app.post('/api/login', async (req, res) => {
     res.status(500).json({ error: 'Error en login' });
   }
 });
+
+// Ruta de prueba para verificar conexión con la base de datos
+app.get('/api/testdb', async (req, res) => {
+  try {
+    const db = await getDB();
+    const [rows] = await db.execute('SELECT NOW() AS fecha');
+    res.json({ ok: true, fecha: rows[0].fecha });
+  } catch (err) {
+    res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
 
 // VERIFICACIÓN EMAIL
 app.get('/api/verify-email', async (req, res) => {
