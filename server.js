@@ -16,6 +16,7 @@ app.use(bodyParser.json());
 
 const JWT_SECRET = process.env.JWT_SECRET || 'change_this_secret';
 
+// Conexión a la base de datos
 async function getDB() {
   return mysql.createPool({
     host: process.env.DB_HOST,
@@ -29,6 +30,7 @@ async function getDB() {
   });
 }
 
+// Middleware de autenticación
 function authMiddleware(req, res, next) {
   const auth = req.headers.authorization;
   if (!auth) return res.status(401).json({ error: 'No token' });
@@ -43,22 +45,23 @@ function authMiddleware(req, res, next) {
   }
 }
 
+// Solo administradores
 function adminOnly(req, res, next) {
   if (!req.user || req.user.rol !== 'admin') return res.status(403).json({ error: 'Solo administradores' });
   next();
 }
 
-app.get('/', (req, res) => {
-  res.send('Servidor SportLike funcionando correctamente');
-});
+// Rutas básicas
+app.get('/', (req, res) => res.send('Servidor SportLike funcionando correctamente'));
 
+// Registro de usuario con TOTP
 app.post('/api/register', async (req, res) => {
   const { nombre, apellidoP, apellidoM, fechaNac, correo, telefono, usuario, password, rol } = req.body;
+
   if (!nombre || !apellidoP || !usuario || !password || !correo)
     return res.status(400).json({ error: 'Faltan campos requeridos' });
   if (password.length < 6) return res.status(400).json({ error: 'La contraseña debe tener al menos 6 caracteres' });
-  const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-  if (!emailRegex.test(correo)) return res.status(400).json({ error: 'Correo inválido' });
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(correo)) return res.status(400).json({ error: 'Correo inválido' });
 
   try {
     const db = await getDB();
@@ -69,8 +72,8 @@ app.post('/api/register', async (req, res) => {
     if (existing.length > 0) return res.status(400).json({ error: 'Usuario, correo o teléfono ya registrado' });
 
     const hash = await bcrypt.hash(password, 10);
-
     const totpSecret = speakeasy.generateSecret({ name: `SportLike (${usuario})` });
+
     const [result] = await db.execute(
       'INSERT INTO users (nombre, apellidoP, apellidoM, fechaNac, correo, telefono, usuario, password, rol, verificado, totpSecret) VALUES (?,?,?,?,?,?,?,?,?,?,?)',
       [nombre, apellidoP, apellidoM || null, fechaNac || null, correo, telefono || null, usuario, hash, rol || 'cliente', 0, totpSecret.base32]
@@ -78,6 +81,7 @@ app.post('/api/register', async (req, res) => {
 
     const qr = await qrcode.toDataURL(totpSecret.otpauth_url);
 
+    // Enviar correo de verificación
     const token = jwt.sign({ id: result.insertId, correo }, JWT_SECRET, { expiresIn: '1d' });
     const transporter = nodemailer.createTransport({
       host: process.env.EMAIL_HOST,
@@ -97,15 +101,17 @@ app.post('/api/register', async (req, res) => {
              <p>Si no creaste esta cuenta, ignora este correo.</p>`
     });
 
-    res.json({ message: 'Usuario registrado correctamente. Revisa tu correo para verificar la cuenta.', qr });
+    res.json({ message: 'Usuario registrado correctamente. Revisa tu correo y escanea el QR con Google Authenticator.', qr });
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: 'Error registrando usuario', details: err.message });
   }
 });
 
+// Login con TOTP
 app.post('/api/login', async (req, res) => {
   const { usuario, password, token } = req.body;
+
   try {
     const db = await getDB();
     const [rows] = await db.execute('SELECT * FROM users WHERE usuario = ?', [usuario]);
@@ -120,7 +126,8 @@ app.post('/api/login', async (req, res) => {
     const verifiedTotp = speakeasy.totp.verify({
       secret: user.totpSecret,
       encoding: 'base32',
-      token
+      token,
+      window: 1
     });
     if (!verifiedTotp) return res.status(401).json({ error: 'Código TOTP incorrecto' });
 
@@ -132,6 +139,7 @@ app.post('/api/login', async (req, res) => {
   }
 });
 
+// Verificación de correo
 app.get('/api/verify-email', async (req, res) => {
   const token = req.query.token;
   if (!token) return res.status(400).send('Token inválido');
@@ -146,6 +154,7 @@ app.get('/api/verify-email', async (req, res) => {
   }
 });
 
+// Recuperación de contraseña
 app.post('/api/forgot-password', async (req, res) => {
   const { correo } = req.body;
   if (!correo) return res.status(400).json({ error: 'Correo requerido' });
@@ -184,6 +193,7 @@ app.post('/api/forgot-password', async (req, res) => {
   }
 });
 
+// Reset de contraseña
 app.post('/api/reset-password', async (req, res) => {
   const { token, password } = req.body;
   if (!token || !password) return res.status(400).json({ error: 'Token y contraseña requeridos' });
@@ -207,6 +217,7 @@ app.post('/api/reset-password', async (req, res) => {
   }
 });
 
+// Obtener usuarios (solo admin)
 app.get('/api/users', authMiddleware, adminOnly, async (req, res) => {
   try {
     const db = await getDB();
