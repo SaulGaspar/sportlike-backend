@@ -52,7 +52,7 @@ function adminOnly(req, res, next) {
 // Rutas básicas
 app.get('/', (req, res) => res.send('Servidor SportLike funcionando correctamente'));
 
-// Registro de usuario con verificación por correo
+// Registro de usuario
 app.post('/api/register', async (req, res) => {
   const { nombre, apellidoP, apellidoM, fechaNac, correo, telefono, usuario, password, rol } = req.body;
 
@@ -63,17 +63,31 @@ app.post('/api/register', async (req, res) => {
 
   try {
     const db = await getDB();
+
     const [existing] = await db.execute(
       'SELECT id FROM users WHERE usuario = ? OR correo = ? OR telefono = ?',
-      [usuario, correo, telefono]
+      [usuario, correo, telefono || null]
     );
     if (existing.length > 0) return res.status(400).json({ error: 'Usuario, correo o teléfono ya registrado' });
 
     const hash = await bcrypt.hash(password, 10);
 
     const [result] = await db.execute(
-      'INSERT INTO users (nombre, apellidoP, apellidoM, fechaNac, correo, telefono, usuario, password, rol, verificado) VALUES (?,?,?,?,?,?,?,?,?,?)',
-      [nombre, apellidoP, apellidoM || null, fechaNac || null, correo, telefono || null, usuario, hash, 'cliente', 0]
+      `INSERT INTO users 
+        (nombre, apellidoP, apellidoM, fechaNac, correo, telefono, usuario, password, rol, verificado, createdAt, updatedAt)
+       VALUES (?,?,?,?,?,?,?,?,?,?,NOW(),NOW())`,
+      [
+        nombre || null,
+        apellidoP || null,
+        apellidoM || null,
+        fechaNac || null,
+        correo || null,
+        telefono || null,
+        usuario || null,
+        hash || null,
+        rol || 'cliente',
+        0
+      ]
     );
 
     // Enviar correo de verificación
