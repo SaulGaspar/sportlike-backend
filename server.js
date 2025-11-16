@@ -4,8 +4,8 @@ const bodyParser = require('body-parser');
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const mysql = require('mysql2/promise');
-const crypto = require('crypto');
 const nodemailer = require('nodemailer');
+const crypto = require('crypto');
 const passport = require('passport');
 const GoogleStrategy = require('passport-google-oauth20').Strategy;
 require('dotenv').config();
@@ -74,12 +74,17 @@ passport.use(new GoogleStrategy(
         const tempPassword = generarPasswordAleatoria();
         const hash = await bcrypt.hash(tempPassword, 10);
         const [result] = await db.execute(
-          `INSERT INTO users 
-            (nombre, correo, usuario, password, rol, verificado, createdAt, updatedAt)
+          `INSERT INTO users (nombre, correo, usuario, password, rol, verificado, createdAt, updatedAt)
            VALUES (?,?,?,?,?,1,NOW(),NOW())`,
           [profile.displayName, correo, profile.id, hash, 'cliente']
         );
-        user = { id: result.insertId, nombre: profile.displayName, correo, usuario: profile.id, rol: 'cliente' };
+        user = {
+          id: result.insertId,
+          nombre: profile.displayName,
+          correo,
+          usuario: profile.id,
+          rol: 'cliente'
+        };
       }
       const token = jwt.sign(
         { id: user.id, usuario: user.usuario, rol: user.rol, correo: user.correo, nombre: user.nombre },
@@ -102,44 +107,45 @@ app.get('/auth/google/callback', passport.authenticate('google', { session: fals
 app.get('/', (req, res) => res.send('Servidor SportLike funcionando correctamente'));
 
 app.post('/api/register', async (req, res) => {
-  const { nombre, apellidoP, apellidoM, fechaNac, correo, telefono, usuario, rol } = req.body;
-  if (!nombre || !apellidoP || !usuario || !correo) return res.status(400).json({ error: 'Faltan campos requeridos' });
+  const { nombre, apellidoP, apellidoM, fechaNac, correo, telefono, usuario, password, rol } = req.body;
+  if (!nombre || !apellidoP || !usuario || !correo || !password)
+    return res.status(400).json({ error: 'Faltan campos requeridos' });
+
   try {
     const db = await getDB();
     const [existing] = await db.execute(
       'SELECT id FROM users WHERE usuario = ? OR correo = ? OR telefono = ?',
       [usuario, correo, telefono || null]
     );
-    if (existing.length > 0) return res.status(400).json({ error: 'Usuario, correo o teléfono ya registrado' });
+    if (existing.length > 0)
+      return res.status(400).json({ error: 'Usuario, correo o teléfono ya registrado' });
 
-    const hash = await bcrypt.hash(generarPasswordAleatoria(), 10);
+    const hash = await bcrypt.hash(password, 10);
     const [result] = await db.execute(
-      `INSERT INTO users 
-        (nombre, apellidoP, apellidoM, fechaNac, correo, telefono, usuario, password, rol, verificado, createdAt, updatedAt)
+      `INSERT INTO users (nombre, apellidoP, apellidoM, fechaNac, correo, telefono, usuario, password, rol, verificado, createdAt, updatedAt)
        VALUES (?,?,?,?,?,?,?,?,?,0,NOW(),NOW())`,
       [nombre, apellidoP, apellidoM || null, fechaNac || null, correo, telefono || null, usuario, hash, rol || 'cliente']
     );
 
-    const verificationToken = crypto.randomBytes(32).toString('hex');
-    const expires = new Date(Date.now() + 24 * 60 * 60 * 1000);
-    await db.execute('INSERT INTO Token (userId, token, expires, type) VALUES (?, ?, ?, ?)', [result.insertId, verificationToken, expires, 'verification']);
-
+    const token = jwt.sign({ id: result.insertId, correo }, JWT_SECRET, { expiresIn: '1d' });
     const transporter = nodemailer.createTransport({
       host: process.env.EMAIL_HOST,
       port: process.env.EMAIL_PORT,
       secure: false,
       auth: { user: process.env.EMAIL_USER, pass: process.env.EMAIL_PASS }
     });
-
-    const verificationLink = `${process.env.CLIENT_URL}/verificar?token=${verificationToken}`;
+    const verifyLink = `${process.env.CLIENT_URL}/verify-email?token=${token}`;
     await transporter.sendMail({
       from: process.env.EMAIL_FROM,
       to: correo,
       subject: 'Verifica tu correo - SportLike',
-      html: `<p>Hola ${nombre},</p><p>Haz clic en el siguiente enlace para verificar tu correo:</p><a href="${verificationLink}">Verificar correo</a>`
+      html: `<p>Hola ${nombre},</p>
+             <p>Para activar tu cuenta, haz clic en el siguiente enlace:</p>
+             <a href="${verifyLink}">Verificar correo</a>
+             <p>Si no creaste esta cuenta, ignora este correo.</p>`
     });
 
-    res.json({ message: 'Usuario registrado correctamente. Revisa tu correo para verificar la cuenta.' });
+    res.json({ message: 'Usuario registrado correctamente. Revisa tu correo para activar tu cuenta.' });
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: 'Error registrando usuario' });
@@ -152,10 +158,12 @@ app.post('/api/login', async (req, res) => {
     const db = await getDB();
     const [rows] = await db.execute('SELECT * FROM users WHERE usuario = ?', [usuario]);
     if (rows.length === 0) return res.status(401).json({ error: 'Usuario no encontrado' });
+
     const user = rows[0];
+    if (user.verificado === 0) return res.status(403).json({ error: 'Debes verificar tu correo antes de iniciar sesión' });
+
     const match = await bcrypt.compare(password, user.password);
     if (!match) return res.status(401).json({ error: 'Contraseña incorrecta' });
-    if (user.verificado === 0) return res.status(401).json({ error: 'Usuario no verificado' });
 
     const jwtToken = jwt.sign({ id: user.id, usuario: user.usuario, rol: user.rol, correo: user.correo }, JWT_SECRET, { expiresIn: '7d' });
     res.json({ user: { id: user.id, nombre: user.nombre, usuario: user.usuario, rol: user.rol, correo: user.correo }, token: jwtToken });
@@ -165,9 +173,24 @@ app.post('/api/login', async (req, res) => {
   }
 });
 
+app.get('/api/verify-email', async (req, res) => {
+  const token = req.query.token;
+  if (!token) return res.status(400).send('Token inválido');
+
+  try {
+    const decoded = jwt.verify(token, JWT_SECRET);
+    const db = await getDB();
+    await db.execute('UPDATE users SET verificado = 1 WHERE id = ?', [decoded.id]);
+    res.send('Correo verificado correctamente. Ahora puedes iniciar sesión.');
+  } catch {
+    res.status(400).send('Token inválido o expirado');
+  }
+});
+
 app.post('/api/forgot-password', async (req, res) => {
   const { correo } = req.body;
   if (!correo) return res.status(400).json({ error: 'Correo requerido' });
+
   try {
     const db = await getDB();
     const [users] = await db.execute('SELECT id FROM users WHERE correo = ?', [correo]);
@@ -176,10 +199,28 @@ app.post('/api/forgot-password', async (req, res) => {
     const userId = users[0].id;
     const token = crypto.randomBytes(32).toString('hex');
     const expires = new Date(Date.now() + 3600000);
-    await db.execute('INSERT INTO Token (userId, token, expires, type) VALUES (?, ?, ?, ?)', [userId, token, expires, 'reset']);
+
+    await db.execute('UPDATE users SET resetToken = ?, resetTokenExpiry = ? WHERE id = ?', [token, expires, userId]);
+
+    const transporter = nodemailer.createTransport({
+      host: process.env.EMAIL_HOST,
+      port: process.env.EMAIL_PORT,
+      secure: false,
+      auth: { user: process.env.EMAIL_USER, pass: process.env.EMAIL_PASS }
+    });
 
     const resetLink = `${process.env.CLIENT_URL}/recuperar-password?token=${token}`;
-    res.json({ message: 'Token generado', resetLink });
+    await transporter.sendMail({
+      from: process.env.EMAIL_FROM,
+      to: correo,
+      subject: 'Recuperación de contraseña - SportLike',
+      html: `<p>Hola,</p>
+             <p>Haz solicitado restablecer tu contraseña. Haz clic en el siguiente enlace:</p>
+             <a href="${resetLink}">Restablecer contraseña</a>
+             <p>Si no solicitaste esto, ignora este correo.</p>`
+    });
+
+    res.json({ message: 'Correo de recuperación enviado' });
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: 'Error procesando solicitud' });
@@ -190,17 +231,18 @@ app.post('/api/reset-password', async (req, res) => {
   const { token, password } = req.body;
   if (!token || !password) return res.status(400).json({ error: 'Token y contraseña requeridos' });
   if (password.length < 6) return res.status(400).json({ error: 'La contraseña debe tener al menos 6 caracteres' });
+
   try {
     const db = await getDB();
-    const [rows] = await db.execute('SELECT userId, expires FROM Token WHERE token = ? AND type = "reset"', [token]);
+    const [rows] = await db.execute('SELECT id, resetTokenExpiry FROM users WHERE resetToken = ?', [token]);
     if (rows.length === 0) return res.status(400).json({ error: 'Token inválido' });
 
-    const tokenData = rows[0];
-    if (new Date(tokenData.expires) < new Date()) return res.status(400).json({ error: 'Token expirado' });
+    const user = rows[0];
+    if (new Date(user.resetTokenExpiry) < new Date()) return res.status(400).json({ error: 'Token expirado' });
 
     const hash = await bcrypt.hash(password, 10);
-    await db.execute('UPDATE users SET password = ? WHERE id = ?', [hash, tokenData.userId]);
-    await db.execute('DELETE FROM Token WHERE token = ?', [token]);
+    await db.execute('UPDATE users SET password = ?, resetToken = NULL, resetTokenExpiry = NULL WHERE id = ?', [hash, user.id]);
+
     res.json({ message: 'Contraseña restablecida correctamente' });
   } catch (err) {
     console.error(err);
@@ -211,15 +253,17 @@ app.post('/api/reset-password', async (req, res) => {
 app.post('/api/update-profile', authMiddleware, async (req, res) => {
   const { nombre, apellidoP, apellidoM, telefono, usuario } = req.body;
   if (!nombre || !apellidoP || !usuario) return res.status(400).json({ error: 'Faltan campos requeridos' });
+
   try {
     const db = await getDB();
     const [exists] = await db.execute('SELECT id FROM users WHERE (usuario = ? OR telefono = ?) AND id != ?', [usuario, telefono || null, req.user.id]);
     if (exists.length > 0) return res.status(400).json({ error: 'Usuario o teléfono ya registrado' });
 
     await db.execute(
-      'UPDATE users SET nombre=?, apellidoP=?, apellidoM=?, telefono=?, usuario=?, updatedAt=NOW() WHERE id=?',
+      `UPDATE users SET nombre=?, apellidoP=?, apellidoM=?, telefono=?, usuario=?, updatedAt=NOW() WHERE id=?`,
       [nombre, apellidoP, apellidoM || null, telefono || null, usuario, req.user.id]
     );
+
     res.json({ message: 'Perfil actualizado correctamente' });
   } catch (err) {
     console.error(err);
@@ -230,6 +274,7 @@ app.post('/api/update-profile', authMiddleware, async (req, res) => {
 app.post('/api/update-password', authMiddleware, async (req, res) => {
   const { actual, nueva } = req.body;
   if (!actual || !nueva) return res.status(400).json({ error: 'Debes enviar ambas contraseñas' });
+
   try {
     const db = await getDB();
     const [rows] = await db.execute('SELECT password FROM users WHERE id=?', [req.user.id]);
@@ -240,6 +285,7 @@ app.post('/api/update-password', authMiddleware, async (req, res) => {
 
     const hash = await bcrypt.hash(nueva, 10);
     await db.execute('UPDATE users SET password=?, updatedAt=NOW() WHERE id=?', [hash, req.user.id]);
+
     res.json({ message: 'Contraseña actualizada correctamente' });
   } catch (err) {
     console.error(err);
