@@ -56,6 +56,7 @@ function adminOnly(req, res, next) {
   next();
 }
 
+// ================= GOOGLE LOGIN =================
 passport.use(new GoogleStrategy(
   {
     clientID: process.env.GOOGLE_CLIENT_ID,
@@ -104,8 +105,10 @@ app.get('/auth/google/callback', passport.authenticate('google', { session: fals
   res.redirect(`${process.env.CLIENT_URL}/google-callback?token=${token}`);
 });
 
+// ================= RUTAS =================
 app.get('/', (req, res) => res.send('Servidor SportLike funcionando correctamente'));
 
+// -------- REGISTRO --------
 app.post('/api/register', async (req, res) => {
   const { nombre, apellidoP, apellidoM, fechaNac, correo, telefono, usuario, password, rol } = req.body;
   if (!nombre || !apellidoP || !usuario || !correo || !password)
@@ -127,6 +130,7 @@ app.post('/api/register', async (req, res) => {
       [nombre, apellidoP, apellidoM || null, fechaNac || null, correo, telefono || null, usuario, hash, rol || 'cliente']
     );
 
+    // Enviar correo de verificación
     const token = jwt.sign({ id: result.insertId, correo }, JWT_SECRET, { expiresIn: '1d' });
     const transporter = nodemailer.createTransport({
       host: process.env.EMAIL_HOST,
@@ -152,6 +156,7 @@ app.post('/api/register', async (req, res) => {
   }
 });
 
+// -------- LOGIN --------
 app.post('/api/login', async (req, res) => {
   const { usuario, password } = req.body;
   try {
@@ -173,6 +178,7 @@ app.post('/api/login', async (req, res) => {
   }
 });
 
+// -------- VERIFICACIÓN DE CORREO --------
 app.get('/api/verify-email', async (req, res) => {
   const token = req.query.token;
   if (!token) return res.status(400).send('Token inválido');
@@ -187,20 +193,23 @@ app.get('/api/verify-email', async (req, res) => {
   }
 });
 
+// -------- RECUPERAR CONTRASEÑA --------
 app.post('/api/forgot-password', async (req, res) => {
   const { correo } = req.body;
   if (!correo) return res.status(400).json({ error: 'Correo requerido' });
 
   try {
     const db = await getDB();
-    const [users] = await db.execute('SELECT id FROM users WHERE correo = ?', [correo]);
+    const [users] = await db.execute('SELECT id, nombre FROM users WHERE correo = ?', [correo]);
     if (users.length === 0) return res.status(404).json({ error: 'Usuario no encontrado' });
 
     const userId = users[0].id;
+    const nombre = users[0].nombre;
     const token = crypto.randomBytes(32).toString('hex');
-    const expires = new Date(Date.now() + 3600000);
+    const expires = new Date(Date.now() + 3600000); // 1 hora
 
-    await db.execute('UPDATE users SET resetToken = ?, resetTokenExpiry = ? WHERE id = ?', [token, expires, userId]);
+    // Guardar token en tabla Token
+    await db.execute('INSERT INTO Token (userId, token, expires, createdAt) VALUES (?, ?, ?, NOW())', [userId, token, expires]);
 
     const transporter = nodemailer.createTransport({
       host: process.env.EMAIL_HOST,
@@ -214,7 +223,7 @@ app.post('/api/forgot-password', async (req, res) => {
       from: process.env.EMAIL_FROM,
       to: correo,
       subject: 'Recuperación de contraseña - SportLike',
-      html: `<p>Hola,</p>
+      html: `<p>Hola ${nombre},</p>
              <p>Haz solicitado restablecer tu contraseña. Haz clic en el siguiente enlace:</p>
              <a href="${resetLink}">Restablecer contraseña</a>
              <p>Si no solicitaste esto, ignora este correo.</p>`
@@ -227,6 +236,7 @@ app.post('/api/forgot-password', async (req, res) => {
   }
 });
 
+// -------- RESET CONTRASEÑA --------
 app.post('/api/reset-password', async (req, res) => {
   const { token, password } = req.body;
   if (!token || !password) return res.status(400).json({ error: 'Token y contraseña requeridos' });
@@ -234,14 +244,15 @@ app.post('/api/reset-password', async (req, res) => {
 
   try {
     const db = await getDB();
-    const [rows] = await db.execute('SELECT id, resetTokenExpiry FROM users WHERE resetToken = ?', [token]);
+    const [rows] = await db.execute('SELECT userId, expires FROM Token WHERE token = ?', [token]);
     if (rows.length === 0) return res.status(400).json({ error: 'Token inválido' });
 
-    const user = rows[0];
-    if (new Date(user.resetTokenExpiry) < new Date()) return res.status(400).json({ error: 'Token expirado' });
+    const tokenData = rows[0];
+    if (new Date(tokenData.expires) < new Date()) return res.status(400).json({ error: 'Token expirado' });
 
     const hash = await bcrypt.hash(password, 10);
-    await db.execute('UPDATE users SET password = ?, resetToken = NULL, resetTokenExpiry = NULL WHERE id = ?', [hash, user.id]);
+    await db.execute('UPDATE users SET password = ? WHERE id = ?', [hash, tokenData.userId]);
+    await db.execute('DELETE FROM Token WHERE token = ?', [token]);
 
     res.json({ message: 'Contraseña restablecida correctamente' });
   } catch (err) {
@@ -250,6 +261,7 @@ app.post('/api/reset-password', async (req, res) => {
   }
 });
 
+// -------- PERFIL --------
 app.post('/api/update-profile', authMiddleware, async (req, res) => {
   const { nombre, apellidoP, apellidoM, telefono, usuario } = req.body;
   if (!nombre || !apellidoP || !usuario) return res.status(400).json({ error: 'Faltan campos requeridos' });
@@ -271,6 +283,7 @@ app.post('/api/update-profile', authMiddleware, async (req, res) => {
   }
 });
 
+// -------- CAMBIO DE CONTRASEÑA --------
 app.post('/api/update-password', authMiddleware, async (req, res) => {
   const { actual, nueva } = req.body;
   if (!actual || !nueva) return res.status(400).json({ error: 'Debes enviar ambas contraseñas' });
@@ -293,6 +306,7 @@ app.post('/api/update-password', authMiddleware, async (req, res) => {
   }
 });
 
+// -------- LISTAR USUARIOS --------
 app.get('/api/users', authMiddleware, adminOnly, async (req, res) => {
   try {
     const db = await getDB();
@@ -304,5 +318,6 @@ app.get('/api/users', authMiddleware, adminOnly, async (req, res) => {
   }
 });
 
+// ================= INICIAR SERVIDOR =================
 const PORT = process.env.PORT || 5000;
 app.listen(PORT, () => console.log(`Servidor corriendo en http://localhost:${PORT}`));
