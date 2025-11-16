@@ -30,7 +30,6 @@ async function getDB() {
   });
 }
 
-// Generar password aleatoria
 function generarPasswordAleatoria(longitud = 10) {
   const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789!@#$%&*';
   let pass = '';
@@ -69,14 +68,12 @@ passport.use(new GoogleStrategy(
       const db = await getDB();
       const correo = profile.emails[0].value;
 
-      // Buscar si ya existe
       const [rows] = await db.execute('SELECT * FROM users WHERE correo = ?', [correo]);
       let user;
 
       if (rows.length > 0) {
         user = rows[0];
       } else {
-        // NUEVO usuario por Google
         const tempPassword = generarPasswordAleatoria();
         const hash = await bcrypt.hash(tempPassword, 10);
 
@@ -95,7 +92,6 @@ passport.use(new GoogleStrategy(
           rol: 'cliente'
         };
 
-        // ENVIAR CONTRASEÑA TEMPORAL POR CORREO
         const transporter = nodemailer.createTransport({
           host: process.env.EMAIL_HOST,
           port: process.env.EMAIL_PORT,
@@ -112,7 +108,6 @@ passport.use(new GoogleStrategy(
             <p>Tu cuenta ha sido creada con Google.</p>
             <p><b>Usuario:</b> ${profile.id}</p>
             <p><b>Contraseña temporal:</b> ${tempPassword}</p>
-            <p>Puedes cambiarla dentro de tu perfil cuando inicies sesión.</p>
           `
         });
       }
@@ -137,7 +132,6 @@ app.get('/auth/google/callback', passport.authenticate('google', { session: fals
   res.redirect(`${process.env.CLIENT_URL}/google-callback?token=${token}`);
 });
 
-// RUTAS
 app.get('/', (req, res) => res.send('Servidor SportLike funcionando correctamente'));
 
 app.post('/api/register', async (req, res) => {
@@ -156,11 +150,10 @@ app.post('/api/register', async (req, res) => {
     if (existing.length > 0)
       return res.status(400).json({ error: 'Usuario, correo o teléfono ya registrado' });
 
-    // Generar contraseña automática
     const tempPassword = generarPasswordAleatoria();
     const hash = await bcrypt.hash(tempPassword, 10);
 
-    const [result] = await db.execute(
+    await db.execute(
       `INSERT INTO users 
         (nombre, apellidoP, apellidoM, fechaNac, correo, telefono, usuario, password, rol, verificado, createdAt, updatedAt)
        VALUES (?,?,?,?,?,?,?,?,?,1,NOW(),NOW())`,
@@ -170,31 +163,10 @@ app.post('/api/register', async (req, res) => {
       ]
     );
 
-    // ENVIAR POR CORREO LA CONTRASEÑA TEMPORAL
-    const transporter = nodemailer.createTransport({
-      host: process.env.EMAIL_HOST,
-      port: process.env.EMAIL_PORT,
-      secure: false,
-      auth: { user: process.env.EMAIL_USER, pass: process.env.EMAIL_PASS }
-    });
-
-    await transporter.sendMail({
-      from: process.env.EMAIL_FROM,
-      to: correo,
-      subject: 'Cuenta creada - SportLike',
-      html: `
-        <p>Hola ${nombre},</p>
-        <p>Tu cuenta ha sido creada exitosamente.</p>
-        <p><b>Usuario:</b> ${usuario}</p>
-        <p><b>Contraseña temporal:</b> ${tempPassword}</p>
-        <p>Puedes cambiarla una vez que inicies sesión.</p>
-      `
-    });
-
     res.json({ message: 'Usuario registrado correctamente. Revisa tu correo.' });
   } catch (err) {
     console.error(err);
-    res.status(500).json({ error: 'Error registrando usuario', details: err.message });
+    res.status(500).json({ error: 'Error registrando usuario' });
   }
 });
 
@@ -212,7 +184,7 @@ app.post('/api/login', async (req, res) => {
     if (!match) return res.status(401).json({ error: 'Contraseña incorrecta' });
 
     const jwtToken = jwt.sign(
-      { id: user.id, usuario: user.usuario, rol: user.rol },
+      { id: user.id, usuario: user.usuario, rol: user.rol, correo: user.correo },
       JWT_SECRET,
       { expiresIn: '7d' }
     );
@@ -301,6 +273,74 @@ app.post('/api/reset-password', async (req, res) => {
   }
 });
 
+// 🔵 ACTUALIZAR PERFIL
+app.post('/api/update-profile', authMiddleware, async (req, res) => {
+  const { nombre, apellidoP, apellidoM, telefono, usuario } = req.body;
+
+  if (!nombre || !apellidoP || !usuario)
+    return res.status(400).json({ error: 'Faltan campos requeridos' });
+
+  try {
+    const db = await getDB();
+
+    const [exists] = await db.execute(
+      'SELECT id FROM users WHERE (usuario = ? OR telefono = ?) AND id != ?',
+      [usuario, telefono || null, req.user.id]
+    );
+
+    if (exists.length > 0)
+      return res.status(400).json({ error: 'Usuario o teléfono ya registrado' });
+
+    await db.execute(
+      `UPDATE users SET 
+        nombre=?, apellidoP=?, apellidoM=?, telefono=?, usuario=?, updatedAt=NOW()
+       WHERE id=?`,
+      [nombre, apellidoP, apellidoM || null, telefono || null, usuario, req.user.id]
+    );
+
+    res.json({ message: 'Perfil actualizado correctamente' });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Error actualizando perfil' });
+  }
+});
+
+// 🔵 ACTUALIZAR CONTRASEÑA DESDE PERFIL
+app.post('/api/update-password', authMiddleware, async (req, res) => {
+  const { actual, nueva } = req.body;
+
+  if (!actual || !nueva)
+    return res.status(400).json({ error: 'Debes enviar ambas contraseñas' });
+
+  try {
+    const db = await getDB();
+    const [rows] = await db.execute(
+      'SELECT password FROM users WHERE id=?',
+      [req.user.id]
+    );
+
+    if (rows.length === 0)
+      return res.status(404).json({ error: 'Usuario no encontrado' });
+
+    const match = await bcrypt.compare(actual, rows[0].password);
+    if (!match)
+      return res.status(401).json({ error: 'La contraseña actual es incorrecta' });
+
+    const hash = await bcrypt.hash(nueva, 10);
+
+    await db.execute(
+      'UPDATE users SET password=?, updatedAt=NOW() WHERE id=?',
+      [hash, req.user.id]
+    );
+
+    res.json({ message: 'Contraseña actualizada correctamente' });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Error actualizando contraseña' });
+  }
+});
+
+// ADMIN GET USERS
 app.get('/api/users', authMiddleware, adminOnly, async (req, res) => {
   try {
     const db = await getDB();
@@ -312,6 +352,5 @@ app.get('/api/users', authMiddleware, adminOnly, async (req, res) => {
   }
 });
 
-// SERVER
 const PORT = process.env.PORT || 5000;
 app.listen(PORT, () => console.log(`Servidor corriendo en http://localhost:${PORT}`));
