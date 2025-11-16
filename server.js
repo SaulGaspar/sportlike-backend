@@ -56,7 +56,7 @@ function adminOnly(req, res, next) {
   next();
 }
 
-// GOOGLE LOGIN
+// GOOGLE LOGIN SIN ENVÍO DE CORREO
 passport.use(new GoogleStrategy(
   {
     clientID: process.env.GOOGLE_CLIENT_ID,
@@ -91,25 +91,6 @@ passport.use(new GoogleStrategy(
           usuario: profile.id,
           rol: 'cliente'
         };
-
-        const transporter = nodemailer.createTransport({
-          host: process.env.EMAIL_HOST,
-          port: process.env.EMAIL_PORT,
-          secure: false,
-          auth: { user: process.env.EMAIL_USER, pass: process.env.EMAIL_PASS }
-        });
-
-        await transporter.sendMail({
-          from: process.env.EMAIL_FROM,
-          to: correo,
-          subject: 'Bienvenido a SportLike (Google Login)',
-          html: `
-            <p>Hola ${profile.displayName},</p>
-            <p>Tu cuenta ha sido creada con Google.</p>
-            <p><b>Usuario:</b> ${profile.id}</p>
-            <p><b>Contraseña temporal:</b> ${tempPassword}</p>
-          `
-        });
       }
 
       const token = jwt.sign(
@@ -199,7 +180,6 @@ app.post('/api/login', async (req, res) => {
   }
 });
 
-// Recuperar contraseña
 app.post('/api/forgot-password', async (req, res) => {
   const { correo } = req.body;
   if (!correo) return res.status(400).json({ error: 'Correo requerido' });
@@ -256,7 +236,8 @@ app.post('/api/reset-password', async (req, res) => {
 
     const user = rows[0];
 
-    if (new Date(user.resetTokenExpiry) < new Date())
+    const now = new Date();
+    if (new Date(user.resetTokenExpiry) < now)
       return res.status(400).json({ error: 'Token expirado' });
 
     const hash = await bcrypt.hash(password, 10);
@@ -273,7 +254,6 @@ app.post('/api/reset-password', async (req, res) => {
   }
 });
 
-// 🔵 ACTUALIZAR PERFIL
 app.post('/api/update-profile', authMiddleware, async (req, res) => {
   const { nombre, apellidoP, apellidoM, telefono, usuario } = req.body;
 
@@ -305,7 +285,6 @@ app.post('/api/update-profile', authMiddleware, async (req, res) => {
   }
 });
 
-// 🔵 ACTUALIZAR CONTRASEÑA DESDE PERFIL
 app.post('/api/update-password', authMiddleware, async (req, res) => {
   const { actual, nueva } = req.body;
 
@@ -340,7 +319,6 @@ app.post('/api/update-password', authMiddleware, async (req, res) => {
   }
 });
 
-// ADMIN GET USERS
 app.get('/api/users', authMiddleware, adminOnly, async (req, res) => {
   try {
     const db = await getDB();
